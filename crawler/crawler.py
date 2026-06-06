@@ -6,7 +6,7 @@ from playwright.async_api import async_playwright
 from ai_discovery import discover_links
 
 SCREENSHOT_DIR = "/tmp/crawler_screenshots"
-MAX_PAGES = 30  # Cap for demo to avoid memory exhaustion
+MAX_PAGES = 15  # Cap for demo to avoid memory exhaustion
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
