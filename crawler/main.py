@@ -10,7 +10,7 @@ app = FastAPI(title="AI Info Acquisition")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://kapaldo.com", "https://www.kapaldo.com", "http://localhost:3000"],
+    allow_origins=["https://kapaldo.com", "https://www.kapaldo.com", "http://localhost:3000", "https://ai-info-acquisition-production.up.railway.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
