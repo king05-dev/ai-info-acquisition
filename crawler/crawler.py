@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import os
 from datetime import datetime
@@ -8,55 +8,57 @@ from playwright.async_api import async_playwright
 SCREENSHOT_DIR = "/tmp/crawler_screenshots"
 MAX_PAGES = 15
 MAX_DEPTH = 6
-MAX_DEEP_LINKS_PER_PAGE = 5  # how many deeper links to queue per page
+MAX_DEEP_LINKS_PER_PAGE = 5
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
 def normalize_url(url: str) -> str:
-    """Strip anchor and query params — two URLs differing only in ?version= are the same page."""
     parsed = urlparse(url)
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
 def url_path_depth(url: str) -> int:
-    """Count non-empty path segments — used to rank links by how deep they go."""
     return len([s for s in urlparse(url).path.split("/") if s])
 
 
-def find_deeper_links(all_hrefs: list[str], current_url: str, allowed_netloc: str, visited: set) -> list[str]:
+def find_next_links(all_hrefs: list[str], current_url: str, allowed_netloc: str, visited: set) -> list[str]:
     """
-    From the raw <a href> list, keep only links that:
-      1. Are on exactly the same subdomain (e.g. docs.stripe.com — not dashboard.stripe.com)
-      2. Have MORE path segments than the current URL (going deeper)
-      3. Haven't been visited yet
-      4. Have no query params (clean doc pages, not API explorer variants)
-    Then sort deepest-first and return the top MAX_DEEP_LINKS_PER_PAGE.
+    Section-aware priority link selection. Does not rely on URL path depth,
+    so it works on Stripe docs where all pages cap at 3 path segments.
+
+    Priority 1: children  - links extending the current path
+    Priority 2: siblings  - same parent section, different child
+    Priority 3: fallback  - any unvisited docs page on the same subdomain
     """
-    current_depth = url_path_depth(current_url)
-    candidates = []
+    current_path = urlparse(current_url).path.rstrip("/")
+    parts = [p for p in current_path.split("/") if p]
+    parent_path = "/" + parts[0] if parts else ""
+
+    children: list[str] = []
+    siblings: list[str] = []
+    fallback: list[str] = []
 
     for href in all_hrefs:
         normalized = normalize_url(href)
         if not normalized or normalized in visited:
             continue
         parsed = urlparse(normalized)
-        if parsed.netloc != allowed_netloc:   # exact match — no dashboard.stripe.com
+        if parsed.netloc != allowed_netloc:
             continue
         if parsed.scheme not in ("http", "https"):
             continue
-        if url_path_depth(normalized) > current_depth:
-            candidates.append(normalized)
+        link_path = parsed.path.rstrip("/")
+        if link_path == current_path:
+            continue
+        if link_path.startswith(current_path + "/"):
+            children.append(normalized)
+        elif parent_path and link_path.startswith(parent_path + "/"):
+            siblings.append(normalized)
+        else:
+            fallback.append(normalized)
 
-    # Deduplicate, sort deepest-first, cap
-    seen = set()
-    unique = []
-    for c in candidates:
-        if c not in seen:
-            seen.add(c)
-            unique.append(c)
-
-    unique.sort(key=url_path_depth, reverse=True)
-    return unique[:MAX_DEEP_LINKS_PER_PAGE]
+    result = list(dict.fromkeys(children + siblings + fallback))
+    return result[:MAX_DEEP_LINKS_PER_PAGE]
 
 
 class Crawler:
@@ -74,7 +76,7 @@ class Crawler:
         self.should_stop = False
         self.started_at = datetime.utcnow().isoformat()
         parsed = urlparse(start_url)
-        self.allowed_netloc = parsed.netloc  # exact subdomain — e.g. "docs.stripe.com"
+        self.allowed_netloc = parsed.netloc
 
     def screenshot_path(self, n: int) -> str:
         return os.path.join(SCREENSHOT_DIR, f"{self.session_id}_page_{n}.png")
@@ -169,7 +171,6 @@ class Crawler:
 
                     await asyncio.sleep(1.5)
 
-                    # Screenshot
                     self.screenshot_count += 1
                     idx = self.screenshot_count
                     try:
@@ -187,30 +188,25 @@ class Crawler:
                         "screenshot_index": idx,
                     }
 
-                    # Extract all hrefs from DOM — no AI needed
                     all_hrefs: list[str] = await page.eval_on_selector_all(
                         "a[href]", "els => els.map(el => el.href)"
                     )
 
-                    # Track everything discovered (for the "not visited" report)
                     for href in all_hrefs:
                         n = normalize_url(href)
                         if n:
                             self.discovered.add(n)
 
                     if depth < self.max_depth:
-                        # Find links that go DEEPER than the current page
-                        deep_links = find_deeper_links(
+                        next_links = find_next_links(
                             all_hrefs, url, self.allowed_netloc, set(self.visited.keys())
                         )
-                        print(f"[crawler] found {len(deep_links)} deeper links", flush=True)
+                        print(f"[crawler] found {len(next_links)} next links (d={depth+1})", flush=True)
 
-                        # Insert in reverse so index-0 = deepest link (first visited next)
-                        for link in reversed(deep_links):
+                        for link in reversed(next_links):
                             clean = normalize_url(link)
                             if clean and clean not in self.visited:
                                 self.queue.insert(0, (clean, depth + 1))
-                    # At max_depth: screenshot taken, links logged — no deeper queuing
 
                 except Exception as e:
                     self.visited[url] = {
