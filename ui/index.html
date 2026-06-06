@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Info Acquisition</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f0f0f; color: #e5e5e5; min-height: 100vh; }
+    header { padding: 20px 32px; border-bottom: 1px solid #222; }
+    header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+    header p { font-size: 13px; color: #888; margin-top: 2px; }
+    .main { display: grid; grid-template-columns: 360px 1fr; height: calc(100vh - 65px); }
+    .sidebar { border-right: 1px solid #222; padding: 24px; overflow-y: auto; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 12px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    input { width: 100%; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; padding: 10px 12px; color: #e5e5e5; font-size: 14px; outline: none; }
+    input:focus { border-color: #555; }
+    button { width: 100%; background: #22c55e; color: #000; border: none; border-radius: 6px; padding: 11px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #16a34a; }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    .stats { margin-top: 24px; }
+    .stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1a1a1a; font-size: 13px; }
+    .stat-label { color: #888; }
+    .stat-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .url-list { margin-top: 24px; }
+    .url-list h3 { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+    .url-item { font-size: 11px; color: #aaa; padding: 4px 0; border-bottom: 1px solid #1a1a1a; word-break: break-all; }
+    .depth-badge { display: inline-block; background: #1a1a1a; border: 1px solid #333; border-radius: 3px; padding: 1px 5px; font-size: 10px; color: #666; margin-right: 6px; }
+    .viewer { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+    .current-url { font-size: 12px; color: #888; word-break: break-all; background: #1a1a1a; padding: 8px 12px; border-radius: 6px; }
+    .screenshot-box { flex: 1; background: #1a1a1a; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+    .screenshot-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .placeholder { color: #444; font-size: 14px; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; background: #333; vertical-align: middle; }
+    .status-dot.running { background: #22c55e; animation: pulse 1s infinite; }
+    .status-dot.done { background: #3b82f6; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AI Information Acquisition</h1>
+    <p>Autonomous web crawler — 5+ levels deep, live browser stream</p>
+  </header>
+  <div class="main">
+    <div class="sidebar">
+      <div class="form-group">
+        <label>Target URL</label>
+        <input id="urlInput" type="url" placeholder="https://docs.stripe.com" />
+      </div>
+      <button id="startBtn" onclick="startCrawl()">Start Crawl</button>
+
+      <div class="stats">
+        <div class="stat">
+          <span class="stat-label">Status</span>
+          <span class="stat-value" id="statusVal"><span class="status-dot" id="statusDot"></span>Idle</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Pages visited</span>
+          <span class="stat-value" id="visitedVal">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Max depth</span>
+          <span class="stat-value" id="depthVal">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Queue remaining</span>
+          <span class="stat-value" id="queueVal">0</span>
+        </div>
+      </div>
+
+      <div class="url-list">
+        <h3>Visited URLs</h3>
+        <div id="urlList"></div>
+      </div>
+    </div>
+
+    <div class="viewer">
+      <div class="current-url" id="currentUrl">No page loaded yet</div>
+      <div class="screenshot-box" id="screenshotBox">
+        <span class="placeholder">Live browser view will appear here</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    const sessionId = 'session_' + Date.now();
+    const visitedUrls = new Set();
+
+    function startCrawl() {
+      const url = document.getElementById('urlInput').value.trim();
+      if (!url) return alert('Please enter a URL');
+
+      document.getElementById('startBtn').disabled = true;
+      visitedUrls.clear();
+      document.getElementById('urlList').innerHTML = '';
+
+      fetch('/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, session_id: sessionId })
+      }).then(() => connectWS());
+    }
+
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws/${sessionId}`);
+      ws.onmessage = (e) => updateUI(JSON.parse(e.data));
+    }
+
+    function updateUI(data) {
+      document.getElementById('statusDot').className = 'status-dot ' + data.status;
+      document.getElementById('statusVal').innerHTML =
+        `<span class="status-dot ${data.status}"></span>${data.status}`;
+      document.getElementById('visitedVal').textContent = data.visited_count;
+      document.getElementById('depthVal').textContent = data.max_depth_reached;
+      document.getElementById('queueVal').textContent = data.queue_remaining;
+
+      if (data.current_url && !visitedUrls.has(data.current_url)) {
+        visitedUrls.add(data.current_url);
+        document.getElementById('currentUrl').textContent = data.current_url;
+        const item = document.createElement('div');
+        item.className = 'url-item';
+        item.innerHTML = `<span class="depth-badge">d${data.max_depth_reached}</span>${data.current_url}`;
+        document.getElementById('urlList').prepend(item);
+      }
+
+      if (data.current_screenshot) {
+        document.getElementById('screenshotBox').innerHTML =
+          `<img src="data:image/png;base64,${data.current_screenshot}" />`;
+      }
+
+      if (data.status === 'done') {
+        document.getElementById('startBtn').disabled = false;
+        if (ws) ws.close();
+      }
+    }
+  </script>
+</body>
+</html>
