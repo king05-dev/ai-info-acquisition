@@ -1,9 +1,12 @@
 import asyncio
-import base64
+import os
 from datetime import datetime
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 from ai_discovery import discover_links
+
+SCREENSHOT_DIR = "/tmp/crawler_screenshots"
+os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
 class Crawler:
@@ -13,18 +16,21 @@ class Crawler:
         self.visited: dict[str, dict] = {}
         self.queue: list[tuple[str, int]] = [(start_url, 0)]
         self.current_url = ""
-        self.current_screenshot = ""
+        self.screenshot_ts = 0
         self.status = "idle"
-        # Match base domain AND subdomains (e.g. docs.stripe.com + stripe.com)
+        self.session_id = ""
         parsed = urlparse(start_url)
         parts = parsed.netloc.split(".")
         self.base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else parsed.netloc
+
+    def screenshot_path(self) -> str:
+        return os.path.join(SCREENSHOT_DIR, f"{self.session_id}.png")
 
     def snapshot(self) -> dict:
         return {
             "status": self.status,
             "current_url": self.current_url,
-            "current_screenshot": self.current_screenshot,
+            "screenshot_ts": self.screenshot_ts,
             "visited_count": len(self.visited),
             "max_depth_reached": max((v["depth"] for v in self.visited.values()), default=0),
             "queue_remaining": len(self.queue),
@@ -60,7 +66,6 @@ class Crawler:
                 if url in self.visited or depth > self.max_depth:
                     continue
 
-                # Allow same base domain and all subdomains
                 netloc = urlparse(url).netloc
                 if not netloc.endswith(self.base_domain):
                     continue
@@ -68,7 +73,6 @@ class Crawler:
                 try:
                     self.current_url = url
 
-                    # Navigate — use commit first (fast), then wait for content
                     try:
                         await page.goto(url, timeout=45000, wait_until="domcontentloaded")
                     except Exception:
@@ -76,12 +80,16 @@ class Crawler:
 
                     await asyncio.sleep(1.5)
 
-                    # Take screenshot
+                    # Save screenshot to disk
                     try:
-                        screenshot_bytes = await page.screenshot(full_page=False, timeout=10000)
-                        self.current_screenshot = base64.b64encode(screenshot_bytes).decode()
+                        await page.screenshot(
+                            path=self.screenshot_path(),
+                            full_page=False,
+                            timeout=10000
+                        )
+                        self.screenshot_ts = int(datetime.utcnow().timestamp())
                     except Exception:
-                        self.current_screenshot = ""
+                        pass
 
                     title = await page.title()
                     self.visited[url] = {
@@ -90,7 +98,6 @@ class Crawler:
                         "visited_at": datetime.utcnow().isoformat(),
                     }
 
-                    # AI-driven discovery for shallow levels
                     if depth <= 2:
                         ai_links = await discover_links(page, url)
                         for link in ai_links:
@@ -98,7 +105,6 @@ class Crawler:
                             if normalized and normalized not in self.visited:
                                 self.queue.insert(0, (normalized, depth + 1))
 
-                    # Standard link extraction
                     links = await page.eval_on_selector_all(
                         "a[href]",
                         "els => els.map(el => el.href)"

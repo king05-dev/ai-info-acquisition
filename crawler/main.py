@@ -1,9 +1,10 @@
 import asyncio
+import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from crawler import Crawler
+from fastapi.responses import JSONResponse, FileResponse
+from crawler import Crawler, SCREENSHOT_DIR
 
 app = FastAPI(title="AI Info Acquisition")
 
@@ -26,6 +27,7 @@ async def start_crawl(payload: dict):
         return JSONResponse({"error": "url required"}, status_code=400)
 
     crawler = Crawler(url, max_depth=6)
+    crawler.session_id = session_id
     active_crawls[session_id] = crawler
     asyncio.create_task(crawler.run())
     return {"session_id": session_id, "status": "started"}
@@ -37,6 +39,14 @@ async def get_status(session_id: str):
     if not crawler:
         return JSONResponse({"error": "session not found"}, status_code=404)
     return crawler.snapshot()
+
+
+@app.get("/screenshot/{session_id}")
+async def get_screenshot(session_id: str):
+    path = os.path.join(SCREENSHOT_DIR, f"{session_id}.png")
+    if not os.path.exists(path):
+        return JSONResponse({"error": "no screenshot yet"}, status_code=404)
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/results/{session_id}")
