@@ -1,4 +1,4 @@
-# AI Information Acquisition Layer
+﻿# AI Information Acquisition Layer
 
 Autonomous web crawler that navigates websites 5+ levels deep, captures screenshots of every page, logs all visited URLs, and documents what was seen vs. missed — centrally hosted and accessible by any team member via browser.
 
@@ -25,12 +25,12 @@ FastAPI Backend (Railway — 8GB RAM)
         1. Load page in real Chromium
         2. Extract all <a href> links from rendered DOM
         3. Filter: same subdomain only, no query params
-        4. Keep only links DEEPER than current URL (more path segments)
-        5. Sort deepest-first, queue top 5 at queue front
+        4. Pick next links by section priority (children → siblings → fallback)
+        5. Queue top 5 at front (depth-first)
         6. Screenshot → move to next URL
 ```
 
-No AI, no token cost. URL path depth is the navigation signal.
+No AI, no token cost. Section-aware DOM crawling is the navigation signal.
 
 ### Why Playwright MCP Was Disqualified
 Playwright MCP runs on a single developer's machine. The requirement was central hosting accessible by multiple team members. Playwright MCP fails this by design.
@@ -45,7 +45,7 @@ Render's free tier has 512MB RAM. Chromium alone requires 300-400MB to launch. E
 | Requirement | Status | How |
 |---|---|---|
 | Autonomously navigate websites | Done | Playwright drives real Chromium |
-| Follow 5+ navigation layers deep | Done | Depth-first queue, URL-path depth heuristic |
+| Follow 5+ navigation layers deep | Done | Depth-first queue, section-aware link selection |
 | Open menus and subpages | Done | Full DOM rendered — all sidebar links captured |
 | Take screenshots | Done | Playwright screenshot per page, all saved |
 | Record visited URLs | Done | Full URL log with depth + title |
@@ -78,10 +78,10 @@ Render's free tier has 512MB RAM. Chromium alone requires 300-400MB to launch. E
 
 ## Test Case — Stripe Documentation
 
-**Target:** `https://docs.stripe.com`  
+**Target:** `https://docs.stripe.com/payments`  
 **Selected because:** Deep sidebar navigation, demanding multi-level structure, well-structured URLs that map to content hierarchy.
 
-Results in `/results/stripe-test/` after a live test run.
+Screenshots and results are stored on the Railway backend in `/tmp/` and streamed live to `kapaldo.com/crawler` — they are not committed to this repository. Run a crawl at kapaldo.com/crawler to generate fresh evidence.
 
 ---
 
@@ -91,10 +91,10 @@ Results in `/results/stripe-test/` after a live test run.
 ai-info-acquisition/
 ├── crawler/
 │   ├── main.py           # FastAPI app — all API endpoints
-│   ├── crawler.py        # Playwright crawl engine + DOM depth heuristic
+│   ├── crawler.py        # Playwright crawl engine + section-aware link selection
 │   └── requirements.txt
 ├── results/
-│   └── stripe-test/      # Test evidence
+│   └── stripe-test/      # Delivery report (analysis.md)
 ├── Dockerfile            # Microsoft Playwright base image
 ├── docker-compose.yml    # Local development
 └── README.md
@@ -124,13 +124,15 @@ No API keys required — no external AI services used.
 
 ## Evidence Collected Per Crawl
 
-After each session the backend saves to `/tmp/`:
+After each session the backend saves to `/tmp/` on the Railway instance:
 
 | File | Contents |
 |---|---|
 | `{session_id}_page_{n}.png` | Screenshot of page n |
 | `{session_id}_latest.png` | Most recent page (live view) |
 | `{session_id}_report.json` | Full JSON: visited URLs, titles, depths, not-visited list |
+
+Screenshots and reports are served live via the API and displayed in the `kapaldo.com/crawler` gallery. They are not stored in this repository.
 
 The JSON report can be fed directly into any LLM for summarization, gap analysis, or decision support.
 
