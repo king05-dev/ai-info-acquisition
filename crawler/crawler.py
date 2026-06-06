@@ -144,7 +144,7 @@ class Crawler:
                         "screenshot_index": idx,
                     }
 
-                    if depth <= 2:
+                    if depth < self.max_depth:
                         ai_links = await discover_links(page, url)
                         for link in ai_links:
                             normalized = link.split("#")[0].rstrip("/")
