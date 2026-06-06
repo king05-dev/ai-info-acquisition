@@ -66,6 +66,14 @@ async def get_status(session_id: str):
     return crawler.snapshot()
 
 
+@app.get("/screenshot/{session_id}")
+async def get_screenshot_compat(session_id: str):
+    path = os.path.join(SCREENSHOT_DIR, f"{session_id}_latest.png")
+    if not os.path.exists(path):
+        return JSONResponse({"error": "no screenshot yet"}, status_code=404)
+    return FileResponse(path, media_type="image/png")
+
+
 @app.get("/screenshot/{session_id}/latest")
 async def get_latest_screenshot(session_id: str):
     path = os.path.join(SCREENSHOT_DIR, f"{session_id}_latest.png")
