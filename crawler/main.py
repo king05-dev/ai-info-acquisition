@@ -1,7 +1,6 @@
 import asyncio
-import json
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from crawler import Crawler
@@ -19,19 +18,6 @@ app.add_middleware(
 active_crawls: dict[str, Crawler] = {}
 
 
-@app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    await websocket.accept()
-    try:
-        while True:
-            crawler = active_crawls.get(session_id)
-            if crawler:
-                await websocket.send_text(json.dumps(crawler.snapshot()))
-            await asyncio.sleep(0.5)
-    except WebSocketDisconnect:
-        pass
-
-
 @app.post("/start")
 async def start_crawl(payload: dict):
     url = payload.get("url")
@@ -43,6 +29,14 @@ async def start_crawl(payload: dict):
     active_crawls[session_id] = crawler
     asyncio.create_task(crawler.run())
     return {"session_id": session_id, "status": "started"}
+
+
+@app.get("/status/{session_id}")
+async def get_status(session_id: str):
+    crawler = active_crawls.get(session_id)
+    if not crawler:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    return crawler.snapshot()
 
 
 @app.get("/results/{session_id}")
