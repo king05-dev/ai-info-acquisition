@@ -124,6 +124,15 @@ Stripe docs is a JS-heavy SPA. The AI phase (Gemini) is critical for discovering
 
 ---
 
-## AI Integration
+## How Navigation Works (No AI Required)
 
-See [`ai-operator.md`](../../ai-operator.md) for full documentation on how Gemini is integrated as an autonomous navigation operator in this system.
+Navigation is driven entirely by DOM inspection — no Gemini, no token cost.
+
+At each page the crawler:
+1. Extracts all `<a href>` links rendered in the DOM
+2. Filters to the same subdomain (`docs.stripe.com` only — no dashboard or external sites)
+3. Keeps only links with **more URL path segments** than the current page (going deeper)
+4. Sorts deepest-first, takes the top 5
+5. Inserts them at the **front** of the queue (depth-first traversal)
+
+This is sufficient because Stripe docs renders its full sidebar navigation as real `<a>` elements — no JavaScript-only rendering issue. URL path depth is a reliable proxy for navigation depth on well-structured documentation sites.
