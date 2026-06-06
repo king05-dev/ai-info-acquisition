@@ -15,7 +15,10 @@ class Crawler:
         self.current_url = ""
         self.current_screenshot = ""
         self.status = "idle"
-        self.base_domain = urlparse(start_url).netloc
+        # Match base domain AND subdomains (e.g. docs.stripe.com + stripe.com)
+        parsed = urlparse(start_url)
+        parts = parsed.netloc.split(".")
+        self.base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else parsed.netloc
 
     def snapshot(self) -> dict:
         return {
@@ -41,8 +44,14 @@ class Crawler:
     async def run(self):
         self.status = "running"
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context()
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            )
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 800},
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+            )
             page = await context.new_page()
 
             while self.queue:
@@ -51,26 +60,37 @@ class Crawler:
                 if url in self.visited or depth > self.max_depth:
                     continue
 
-                if urlparse(url).netloc != self.base_domain:
+                # Allow same base domain and all subdomains
+                netloc = urlparse(url).netloc
+                if not netloc.endswith(self.base_domain):
                     continue
 
                 try:
                     self.current_url = url
-                    await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-                    await asyncio.sleep(0.8)
 
-                    screenshot_bytes = await page.screenshot(full_page=False)
-                    self.current_screenshot = base64.b64encode(screenshot_bytes).decode()
+                    # Navigate — use commit first (fast), then wait for content
+                    try:
+                        await page.goto(url, timeout=45000, wait_until="domcontentloaded")
+                    except Exception:
+                        await page.goto(url, timeout=45000, wait_until="commit")
+
+                    await asyncio.sleep(1.5)
+
+                    # Take screenshot
+                    try:
+                        screenshot_bytes = await page.screenshot(full_page=False, timeout=10000)
+                        self.current_screenshot = base64.b64encode(screenshot_bytes).decode()
+                    except Exception:
+                        self.current_screenshot = ""
 
                     title = await page.title()
                     self.visited[url] = {
                         "depth": depth,
                         "title": title,
-                        "screenshot_b64": self.current_screenshot,
                         "visited_at": datetime.utcnow().isoformat(),
                     }
 
-                    # AI-driven discovery for shallow levels to catch JS-rendered nav
+                    # AI-driven discovery for shallow levels
                     if depth <= 2:
                         ai_links = await discover_links(page, url)
                         for link in ai_links:
@@ -78,7 +98,7 @@ class Crawler:
                             if normalized and normalized not in self.visited:
                                 self.queue.insert(0, (normalized, depth + 1))
 
-                    # Standard link extraction for all levels
+                    # Standard link extraction
                     links = await page.eval_on_selector_all(
                         "a[href]",
                         "els => els.map(el => el.href)"
@@ -91,8 +111,7 @@ class Crawler:
                 except Exception as e:
                     self.visited[url] = {
                         "depth": depth,
-                        "title": f"ERROR: {str(e)}",
-                        "screenshot_b64": "",
+                        "title": f"ERROR: {str(e)[:120]}",
                         "visited_at": datetime.utcnow().isoformat(),
                     }
 
