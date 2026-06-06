@@ -124,46 +124,6 @@ Stripe docs is a JS-heavy SPA. The AI phase (Gemini) is critical for discovering
 
 ---
 
-## AI as Operator — Documentation
+## AI Integration
 
-### Where AI Operates in This System
-
-Gemini 1.5 Flash acts as a **navigation operator** — it makes autonomous decisions about where to go next on a website without any human input.
-
-**Trigger:** Pages at depth 0, 1, 2 (the first 3 levels)  
-**Input:** Raw HTML of the current page (first 8,000 characters)  
-**Decision:** Which links represent real navigation vs noise  
-**Output:** JSON array of URLs to explore next  
-**File:** `crawler/ai_discovery.py`
-
-### Why This Is an "Operator" Not an "Assistant"
-
-An assistant answers when asked. An operator acts without being asked.
-
-In this system:
-- No human tells it which links to click
-- No human reviews its choices before they execute
-- It reads the page → decides → adds URLs to the queue → crawl continues
-
-This is the same pattern used in email operators (AI reads inbox → decides to reply → sends) and call operators (AI hears question → decides response → speaks). The operator pattern is always: **perceive → decide → act.**
-
-### AI Operator Function Map
-
-| Operator | Perceives | Decides | Acts |
-|---|---|---|---|
-| **This crawler** | Page HTML | Which links to follow | Adds URLs to queue |
-| **Email operator** | Inbox content | Which emails need reply | Drafts and sends response |
-| **Call operator** | Voice transcript | How to respond | Speaks reply via voice API |
-| **Form operator** | Form fields | What data to enter | Fills and submits form |
-| **Schedule operator** | Calendar + request | Which slot to book | Creates meeting invite |
-
-This crawler delivers the **information acquisition** operator function. The output (JSON report + screenshots) is designed to be fed into any of the above operators as context — for example, an email operator could use the crawl report to answer customer questions about a competitor's documentation without human research.
-
-### Task 2 Note (Calls & Emails)
-
-OLJ Silvia's follow-up asked about an app where AI operates calls and emails. That is a separate system from this crawler. Recommended tools:
-
-- **Calls:** Vapi.ai or Bland.ai (voice LLM, handles full conversation autonomously)
-- **Emails:** Gmail API + Claude/Gemini (reads, classifies, drafts, sends)
-
-This crawler is the prerequisite — it gives those operators the information they need to act intelligently.
+See [`ai-operator.md`](../../ai-operator.md) for full documentation on how Gemini is integrated as an autonomous navigation operator in this system.
