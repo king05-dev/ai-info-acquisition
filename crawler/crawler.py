@@ -20,6 +20,7 @@ class Crawler:
         self.screenshot_ts = 0
         self.status = "idle"
         self.session_id = ""
+        self.should_stop = False
         parsed = urlparse(start_url)
         parts = parsed.netloc.split(".")
         self.base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else parsed.netloc
@@ -65,7 +66,7 @@ class Crawler:
                 ]
             )
 
-            while self.queue and len(self.visited) < MAX_PAGES:
+            while self.queue and len(self.visited) < MAX_PAGES and not self.should_stop:
                 url, depth = self.queue.pop(0)
 
                 if url in self.visited or depth > self.max_depth:

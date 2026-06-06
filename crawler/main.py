@@ -33,6 +33,15 @@ async def start_crawl(payload: dict):
     return {"session_id": session_id, "status": "started"}
 
 
+@app.post("/stop/{session_id}")
+async def stop_crawl(session_id: str):
+    crawler = active_crawls.get(session_id)
+    if not crawler:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    crawler.should_stop = True
+    return {"session_id": session_id, "status": "stopping"}
+
+
 @app.get("/status/{session_id}")
 async def get_status(session_id: str):
     crawler = active_crawls.get(session_id)
