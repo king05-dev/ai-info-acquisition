@@ -4,20 +4,60 @@ import os
 from datetime import datetime
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
-from ai_discovery import discover_links
 
 SCREENSHOT_DIR = "/tmp/crawler_screenshots"
 MAX_PAGES = 15
-MAX_AI_CALLS = 8   # Gemini calls per session — guides depth chain, saves tokens
+MAX_DEPTH = 6
+MAX_DEEP_LINKS_PER_PAGE = 5  # how many deeper links to queue per page
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
+def url_path_depth(url: str) -> int:
+    """Count non-empty path segments — used to rank links by how deep they go."""
+    return len([s for s in urlparse(url).path.split("/") if s])
+
+
+def find_deeper_links(all_hrefs: list[str], current_url: str, base_domain: str, visited: set) -> list[str]:
+    """
+    From the raw <a href> list, keep only links that:
+      1. Stay on the same domain
+      2. Have MORE path segments than the current URL (going deeper)
+      3. Haven't been visited yet
+    Then sort deepest-first and return the top MAX_DEEP_LINKS_PER_PAGE.
+    """
+    current_depth = url_path_depth(current_url)
+    candidates = []
+
+    for href in all_hrefs:
+        normalized = href.split("#")[0].rstrip("/")
+        if not normalized or normalized in visited:
+            continue
+        parsed = urlparse(normalized)
+        if not parsed.netloc.endswith(base_domain):
+            continue
+        if parsed.scheme not in ("http", "https"):
+            continue
+        if url_path_depth(normalized) > current_depth:
+            candidates.append(normalized)
+
+    # Deduplicate, sort deepest-first, cap
+    seen = set()
+    unique = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+
+    unique.sort(key=url_path_depth, reverse=True)
+    return unique[:MAX_DEEP_LINKS_PER_PAGE]
+
+
 class Crawler:
-    def __init__(self, start_url: str, max_depth: int = 6):
+    def __init__(self, start_url: str, max_depth: int = MAX_DEPTH):
         self.start_url = start_url
         self.max_depth = max_depth
         self.visited: dict[str, dict] = {}
-        self.discovered: set[str] = set()  # all URLs found, including not visited
+        self.discovered: set[str] = set()
         self.queue: list[tuple[str, int]] = [(start_url, 0)]
         self.current_url = ""
         self.screenshot_ts = 0
@@ -25,15 +65,12 @@ class Crawler:
         self.status = "idle"
         self.session_id = ""
         self.should_stop = False
-        self.ai_calls_used = 0
         self.started_at = datetime.utcnow().isoformat()
         parsed = urlparse(start_url)
         parts = parsed.netloc.split(".")
         self.base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else parsed.netloc
 
-    def screenshot_path(self, n: int | None = None) -> str:
-        if n is None:
-            n = self.screenshot_count
+    def screenshot_path(self, n: int) -> str:
         return os.path.join(SCREENSHOT_DIR, f"{self.session_id}_page_{n}.png")
 
     def latest_screenshot_path(self) -> str:
@@ -117,22 +154,20 @@ class Crawler:
 
                 try:
                     self.current_url = url
-                    print(f"[crawler] visiting depth={depth} page={len(self.visited)+1} url={url}", flush=True)
+                    print(f"[crawler] d={depth} page={len(self.visited)+1} {url}", flush=True)
 
                     try:
                         await page.goto(url, timeout=30000, wait_until="domcontentloaded")
                     except Exception:
-                        print(f"[crawler] fallback to commit: {url}", flush=True)
                         await page.goto(url, timeout=30000, wait_until="commit")
 
                     await asyncio.sleep(1.5)
 
+                    # Screenshot
                     self.screenshot_count += 1
                     idx = self.screenshot_count
                     try:
-                        # Save indexed screenshot
                         await page.screenshot(path=self.screenshot_path(idx), full_page=False, timeout=10000)
-                        # Also save as latest for live preview
                         await page.screenshot(path=self.latest_screenshot_path(), full_page=False, timeout=10000)
                         self.screenshot_ts = int(datetime.utcnow().timestamp())
                     except Exception:
@@ -146,44 +181,29 @@ class Crawler:
                         "screenshot_index": idx,
                     }
 
+                    # Extract all hrefs from DOM — no AI needed
+                    all_hrefs: list[str] = await page.eval_on_selector_all(
+                        "a[href]", "els => els.map(el => el.href)"
+                    )
+
+                    # Track everything discovered (for the "not visited" report)
+                    for href in all_hrefs:
+                        normalized = href.split("#")[0].rstrip("/")
+                        if normalized:
+                            self.discovered.add(normalized)
+
                     if depth < self.max_depth:
-                        use_ai = self.ai_calls_used < MAX_AI_CALLS
-                        if use_ai:
-                            self.ai_calls_used += 1
-                            print(f"[crawler] gemini call #{self.ai_calls_used}", flush=True)
-                            ai_links = await discover_links(page, url)
-                            # Insert in reverse so Gemini's first (deepest) link is at queue front
-                            for link in reversed(ai_links):
-                                normalized = link.split("#")[0].rstrip("/")
-                                if normalized:
-                                    self.discovered.add(normalized)
-                                    if normalized not in self.visited:
-                                        self.queue.insert(0, (normalized, depth + 1))
-                        else:
-                            # Budget exhausted — href-only but filtered to same URL-path prefix
-                            # so we don't flood the queue with unrelated breadth links
-                            current_path = urlparse(url).path.rstrip("/")
-                            links = await page.eval_on_selector_all("a[href]", "els => els.map(el => el.href)")
-                            for link in links:
-                                normalized = link.split("#")[0].rstrip("/")
-                                if not normalized:
-                                    continue
-                                parsed_link = urlparse(normalized)
-                                if not parsed_link.netloc.endswith(self.base_domain):
-                                    continue
-                                link_path = parsed_link.path.rstrip("/")
-                                # Only queue links that go deeper in the same section
-                                if link_path.startswith(current_path + "/"):
-                                    self.discovered.add(normalized)
-                                    if normalized not in self.visited:
-                                        self.queue.insert(0, (normalized, depth + 1))
-                    else:
-                        # At max depth — log hrefs as discovered but don't queue
-                        links = await page.eval_on_selector_all("a[href]", "els => els.map(el => el.href)")
-                        for link in links:
-                            normalized = link.split("#")[0].rstrip("/")
-                            if normalized:
-                                self.discovered.add(normalized)
+                        # Find links that go DEEPER than the current page
+                        deep_links = find_deeper_links(
+                            all_hrefs, url, self.base_domain, set(self.visited.keys())
+                        )
+                        print(f"[crawler] found {len(deep_links)} deeper links", flush=True)
+
+                        # Insert in reverse so index-0 = deepest link (first visited next)
+                        for link in reversed(deep_links):
+                            if link not in self.visited:
+                                self.queue.insert(0, (link, depth + 1))
+                    # At max_depth: screenshot taken, links logged — no deeper queuing
 
                 except Exception as e:
                     self.visited[url] = {
@@ -198,10 +218,9 @@ class Crawler:
 
             await browser.close()
 
-        # Save final report to disk
         report = self.export()
         report_path = os.path.join(SCREENSHOT_DIR, f"{self.session_id}_report.json")
         with open(report_path, "w") as f:
             json.dump(report, f, indent=2)
-        print(f"[crawler] done. visited={len(self.visited)} screenshots={self.screenshot_count}", flush=True)
+        print(f"[crawler] done. visited={len(self.visited)} max_depth={report['max_depth']}", flush=True)
         self.status = "done"
