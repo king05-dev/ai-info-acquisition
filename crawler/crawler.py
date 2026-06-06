@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 from playwright.async_api import async_playwright
 
 SCREENSHOT_DIR = "/tmp/crawler_screenshots"
@@ -12,28 +12,35 @@ MAX_DEEP_LINKS_PER_PAGE = 5  # how many deeper links to queue per page
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
+def normalize_url(url: str) -> str:
+    """Strip anchor and query params — two URLs differing only in ?version= are the same page."""
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+
+
 def url_path_depth(url: str) -> int:
     """Count non-empty path segments — used to rank links by how deep they go."""
     return len([s for s in urlparse(url).path.split("/") if s])
 
 
-def find_deeper_links(all_hrefs: list[str], current_url: str, base_domain: str, visited: set) -> list[str]:
+def find_deeper_links(all_hrefs: list[str], current_url: str, allowed_netloc: str, visited: set) -> list[str]:
     """
     From the raw <a href> list, keep only links that:
-      1. Stay on the same domain
+      1. Are on exactly the same subdomain (e.g. docs.stripe.com — not dashboard.stripe.com)
       2. Have MORE path segments than the current URL (going deeper)
       3. Haven't been visited yet
+      4. Have no query params (clean doc pages, not API explorer variants)
     Then sort deepest-first and return the top MAX_DEEP_LINKS_PER_PAGE.
     """
     current_depth = url_path_depth(current_url)
     candidates = []
 
     for href in all_hrefs:
-        normalized = href.split("#")[0].rstrip("/")
+        normalized = normalize_url(href)
         if not normalized or normalized in visited:
             continue
         parsed = urlparse(normalized)
-        if not parsed.netloc.endswith(base_domain):
+        if parsed.netloc != allowed_netloc:   # exact match — no dashboard.stripe.com
             continue
         if parsed.scheme not in ("http", "https"):
             continue
@@ -58,7 +65,7 @@ class Crawler:
         self.max_depth = max_depth
         self.visited: dict[str, dict] = {}
         self.discovered: set[str] = set()
-        self.queue: list[tuple[str, int]] = [(start_url, 0)]
+        self.queue: list[tuple[str, int]] = [(normalize_url(start_url), 0)]
         self.current_url = ""
         self.screenshot_ts = 0
         self.screenshot_count = 0
@@ -67,8 +74,7 @@ class Crawler:
         self.should_stop = False
         self.started_at = datetime.utcnow().isoformat()
         parsed = urlparse(start_url)
-        parts = parsed.netloc.split(".")
-        self.base_domain = ".".join(parts[-2:]) if len(parts) >= 2 else parsed.netloc
+        self.allowed_netloc = parsed.netloc  # exact subdomain — e.g. "docs.stripe.com"
 
     def screenshot_path(self, n: int) -> str:
         return os.path.join(SCREENSHOT_DIR, f"{self.session_id}_page_{n}.png")
@@ -137,7 +143,7 @@ class Crawler:
                     continue
 
                 netloc = urlparse(url).netloc
-                if not netloc.endswith(self.base_domain):
+                if netloc != self.allowed_netloc:
                     continue
 
                 context = await browser.new_context(
@@ -188,21 +194,22 @@ class Crawler:
 
                     # Track everything discovered (for the "not visited" report)
                     for href in all_hrefs:
-                        normalized = href.split("#")[0].rstrip("/")
-                        if normalized:
-                            self.discovered.add(normalized)
+                        n = normalize_url(href)
+                        if n:
+                            self.discovered.add(n)
 
                     if depth < self.max_depth:
                         # Find links that go DEEPER than the current page
                         deep_links = find_deeper_links(
-                            all_hrefs, url, self.base_domain, set(self.visited.keys())
+                            all_hrefs, url, self.allowed_netloc, set(self.visited.keys())
                         )
                         print(f"[crawler] found {len(deep_links)} deeper links", flush=True)
 
                         # Insert in reverse so index-0 = deepest link (first visited next)
                         for link in reversed(deep_links):
-                            if link not in self.visited:
-                                self.queue.insert(0, (link, depth + 1))
+                            clean = normalize_url(link)
+                            if clean and clean not in self.visited:
+                                self.queue.insert(0, (clean, depth + 1))
                     # At max_depth: screenshot taken, links logged — no deeper queuing
 
                 except Exception as e:
