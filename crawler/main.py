@@ -62,5 +62,10 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/")
+async def root():
+    return {"service": "AI Info Acquisition", "status": "ok", "endpoints": ["/start", "/status/{session_id}", "/screenshot/{session_id}", "/results/{session_id}"]}
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
