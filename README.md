@@ -154,3 +154,80 @@ The JSON report is the "evidence for later AI analysis" — it can be fed direct
 - `/tmp` storage is lost on Railway restart — not permanent storage
 - JS-heavy SPAs may timeout on first visit (45s limit)
 - Free Railway credit: $5/month (~500 idle hours, less when crawling)
+
+---
+
+## AI as Operator — What Gemini Actually Does
+
+This section answers: *"Where exactly does AI work as an operator in this system?"*
+
+### The Concept
+
+An **AI operator** is an AI that takes actions autonomously — it does not just answer questions, it makes decisions and executes them. In this crawler, Gemini acts as a navigation operator: it reads a page and decides where to go next, the same way a human researcher would.
+
+### Gemini's Specific Role
+
+```
+File: crawler/ai_discovery.py
+Model: gemini-1.5-flash
+Triggered: At depth 0, 1, 2 (the first 3 levels of any crawl)
+```
+
+**What it receives:**
+```
+Current URL: https://docs.stripe.com
+Page HTML (first 8,000 characters of the body)
+```
+
+**What it decides:**
+- Which links are real navigation (sidebar menus, top nav, expandable sections)
+- Which links are noise (footer links, legal pages, external sites)
+- Which links lead deeper into the documentation structure
+
+**What it returns:**
+```json
+["https://docs.stripe.com/payments", "https://docs.stripe.com/api", "https://docs.stripe.com/connect"]
+```
+
+**Why this matters:**  
+Modern documentation sites (Stripe, Notion, GitHub) render navigation menus using JavaScript. A regular `<a href>` scraper cannot see these links because they don't exist in the raw HTML — they are created by JavaScript at runtime. Gemini reads what the browser actually rendered and identifies navigation paths a human would follow.
+
+### AI Operator vs AI Assistant
+
+| | AI Assistant | AI Operator (this system) |
+|---|---|---|
+| Input | User question | Page HTML |
+| Output | Text answer | Navigation decision (URL list) |
+| Human needed? | Yes — to ask questions | No — runs autonomously |
+| Action taken | None | Adds URLs to crawl queue |
+| Example | "What's on this page?" | "Where should I go next?" |
+
+### Future AI Operator Functions (Out of Scope for v1)
+
+The same operator pattern can be extended to:
+
+| Function | AI Operator Role | Tool Required |
+|---|---|---|
+| **Email** | Read inbox, decide which to reply to, draft response, send | Gmail API + Claude/Gemini |
+| **Phone calls** | Answer call, understand intent, respond or escalate | Vapi.ai / Bland.ai + LLM |
+| **Form filling** | Read a form, decide what to input, submit | Playwright + LLM |
+| **Scheduling** | Read calendar, find slot, book meeting | Google Calendar API + LLM |
+| **Research** | Find sources, extract facts, summarize | This crawler + LLM analysis |
+
+This crawler is the **research operator** — the one that acquires information so other operators have context to act on.
+
+---
+
+## Task 2 Reference — AI Operator for Calls & Emails
+
+*From OLJ Silvia's follow-up request: "Please share with me the app and its all function where AI works as an operator (calls, emails etc)"*
+
+This crawler demonstrates the **information acquisition** operator. For calls and emails, the recommended stack is:
+
+| Channel | Tool | How AI Operates |
+|---|---|---|
+| **Phone calls** | Vapi.ai or Bland.ai | AI answers/makes calls using a voice LLM. Handles greetings, intent detection, responses, escalation |
+| **Emails** | Gmail API + LLM | AI reads emails, classifies intent, drafts and sends replies autonomously |
+| **Chat/support** | Custom or Intercom | AI handles first-line support, escalates to human when confidence is low |
+
+These are separate tools, not part of this crawler. This crawler's AI operator role is: **autonomously navigate websites and acquire information without human copy-paste.** That is the specific operator function delivered here.
