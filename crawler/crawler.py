@@ -60,12 +60,8 @@ class Crawler:
                     "--disable-gpu",
                     "--disable-software-rasterizer",
                     "--disable-extensions",
-                    "--disable-background-networking",
-                    "--disable-sync",
-                    "--disable-translate",
                     "--no-first-run",
                     "--mute-audio",
-                    "--single-process",
                 ]
             )
 
@@ -95,11 +91,13 @@ class Crawler:
 
                 try:
                     self.current_url = url
+                    print(f"[crawler] visiting depth={depth} url={url}", flush=True)
 
                     try:
-                        await page.goto(url, timeout=45000, wait_until="domcontentloaded")
+                        await page.goto(url, timeout=30000, wait_until="domcontentloaded")
                     except Exception:
-                        await page.goto(url, timeout=45000, wait_until="commit")
+                        print(f"[crawler] domcontentloaded timeout, retrying with commit: {url}", flush=True)
+                        await page.goto(url, timeout=30000, wait_until="commit")
 
                     await asyncio.sleep(1.5)
 
