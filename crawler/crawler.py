@@ -8,6 +8,7 @@ from ai_discovery import discover_links
 
 SCREENSHOT_DIR = "/tmp/crawler_screenshots"
 MAX_PAGES = 15
+MAX_AI_CALLS = 8   # Gemini calls per session — guides depth chain, saves tokens
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
@@ -24,6 +25,7 @@ class Crawler:
         self.status = "idle"
         self.session_id = ""
         self.should_stop = False
+        self.ai_calls_used = 0
         self.started_at = datetime.utcnow().isoformat()
         parsed = urlparse(start_url)
         parts = parsed.netloc.split(".")
@@ -145,21 +147,43 @@ class Crawler:
                     }
 
                     if depth < self.max_depth:
-                        ai_links = await discover_links(page, url)
-                        for link in ai_links:
+                        use_ai = self.ai_calls_used < MAX_AI_CALLS
+                        if use_ai:
+                            self.ai_calls_used += 1
+                            print(f"[crawler] gemini call #{self.ai_calls_used}", flush=True)
+                            ai_links = await discover_links(page, url)
+                            # Insert in reverse so Gemini's first (deepest) link is at queue front
+                            for link in reversed(ai_links):
+                                normalized = link.split("#")[0].rstrip("/")
+                                if normalized:
+                                    self.discovered.add(normalized)
+                                    if normalized not in self.visited:
+                                        self.queue.insert(0, (normalized, depth + 1))
+                        else:
+                            # Budget exhausted — href-only but filtered to same URL-path prefix
+                            # so we don't flood the queue with unrelated breadth links
+                            current_path = urlparse(url).path.rstrip("/")
+                            links = await page.eval_on_selector_all("a[href]", "els => els.map(el => el.href)")
+                            for link in links:
+                                normalized = link.split("#")[0].rstrip("/")
+                                if not normalized:
+                                    continue
+                                parsed_link = urlparse(normalized)
+                                if not parsed_link.netloc.endswith(self.base_domain):
+                                    continue
+                                link_path = parsed_link.path.rstrip("/")
+                                # Only queue links that go deeper in the same section
+                                if link_path.startswith(current_path + "/"):
+                                    self.discovered.add(normalized)
+                                    if normalized not in self.visited:
+                                        self.queue.insert(0, (normalized, depth + 1))
+                    else:
+                        # At max depth — log hrefs as discovered but don't queue
+                        links = await page.eval_on_selector_all("a[href]", "els => els.map(el => el.href)")
+                        for link in links:
                             normalized = link.split("#")[0].rstrip("/")
                             if normalized:
                                 self.discovered.add(normalized)
-                                if normalized not in self.visited:
-                                    self.queue.insert(0, (normalized, depth + 1))
-
-                    links = await page.eval_on_selector_all("a[href]", "els => els.map(el => el.href)")
-                    for link in links:
-                        normalized = link.split("#")[0].rstrip("/")
-                        if normalized:
-                            self.discovered.add(normalized)
-                            if normalized not in self.visited:
-                                self.queue.append((normalized, depth + 1))
 
                 except Exception as e:
                     self.visited[url] = {
