@@ -6,6 +6,7 @@ from playwright.async_api import async_playwright
 from ai_discovery import discover_links
 
 SCREENSHOT_DIR = "/tmp/crawler_screenshots"
+MAX_PAGES = 30  # Cap for demo to avoid memory exhaustion
 os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 
@@ -52,15 +53,23 @@ class Crawler:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--disable-sync",
+                    "--disable-translate",
+                    "--no-first-run",
+                    "--mute-audio",
+                    "--single-process",
+                ]
             )
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = await context.new_page()
 
-            while self.queue:
+            while self.queue and len(self.visited) < MAX_PAGES:
                 url, depth = self.queue.pop(0)
 
                 if url in self.visited or depth > self.max_depth:
@@ -69,6 +78,20 @@ class Crawler:
                 netloc = urlparse(url).netloc
                 if not netloc.endswith(self.base_domain):
                     continue
+
+                # Fresh context + page per visit to avoid memory leaks
+                context = await browser.new_context(
+                    viewport={"width": 1280, "height": 800},
+                    user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                    java_script_enabled=True,
+                )
+                page = await context.new_page()
+
+                # Block heavy resources to save memory
+                await page.route(
+                    "**/*.{png,jpg,jpeg,gif,svg,webp,ico,woff,woff2,ttf,mp4,mp3}",
+                    lambda route: route.abort()
+                )
 
                 try:
                     self.current_url = url
@@ -80,7 +103,7 @@ class Crawler:
 
                     await asyncio.sleep(1.5)
 
-                    # Save screenshot to disk
+                    # Screenshot (CSS/fonts blocked but page structure visible)
                     try:
                         await page.screenshot(
                             path=self.screenshot_path(),
@@ -120,6 +143,9 @@ class Crawler:
                         "title": f"ERROR: {str(e)[:120]}",
                         "visited_at": datetime.utcnow().isoformat(),
                     }
+                finally:
+                    await page.close()
+                    await context.close()
 
             await browser.close()
         self.status = "done"
